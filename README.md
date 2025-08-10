@@ -1,4 +1,4 @@
-#PICBayesmc
+# PICBayesmc	
 Bayesian Semiparametric Partially Linear Cure Models with Partly Interval-censored Data
 
 The main program is in file "PICBayesmc.R", which can produce the estimated covariate effects in terms of point estimates, as well as the estimated survival functions and unknown functions using a Bayesian approach. 
