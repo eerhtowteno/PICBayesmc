@@ -1,6 +1,26 @@
+###############################################################################
+#  estimation procedures
+# ###############################################################################
+#data: including the observations
+# X, V: linear and nonlinear covariates in the latency components
+# Z, W: linear and nonlinear covariates in the incidence components
+# L, R: left and right endpoints of intervals
+# y: status for the observations
+# vknots,V.df, V.order: number of knots, degree of freedom for the nonlinear function phi(v)
+# Vgrid: evaluation points for the phi(v)
+# wknots, W.df, W.order:number of knots, degree of freedom for the nonlinear function g(w)
+# Wgrid: evaluation points for the g(w)
+# a_eta, b_eta: hyperparameters
+# sig_beta, sig_alpha, sig_rho, sig_theta: variance of prior distribution
+# coef_range_beta, coef_range_alpha, coef_range_rho, coef_range_theta: the range of coefficients
+
 rm(list=ls())
-#############################################################################
-SMC <- function (data,order, knots, df,grids,
+library(dlm)
+library(splines)
+library(icenReg)
+library(survival)
+library(dplyr)
+bmc_est <- function (data,order, knots, df,grids,
                  V.order,Vknots,V.df,Vgrid, 
                  W.order,Wknots,W.df,Wgrid,
                  a_eta, b_eta,
@@ -11,132 +31,6 @@ SMC <- function (data,order, knots, df,grids,
                  burnin, thin) 
 {
   #main function
-  library(dlm)
-  library(splines)
-  library(icenReg)
-  library(survival)
-  Ispline <- function(x, order, knots) {
-    k = order + 1
-    m = length(knots)
-    n = m - 2 + k
-    t = c(rep(1, k) * knots[1], knots[2:(m - 1)], rep(1, 
-                                                      k) * knots[m])
-    yy1 = array(rep(0, (n + k - 1) * length(x)), dim = c(n + 
-                                                           k - 1, length(x)))
-    for (l in k:n) {
-      yy1[l, ] = (x >= t[l] & x < t[l + 1])/(t[l + 1] - 
-                                               t[l])
-    }
-    yytem1 = yy1
-    for (ii in 1:order) {
-      yytem2 = array(rep(0, (n + k - 1 - ii) * length(x)), 
-                     dim = c(n + k - 1 - ii, length(x)))
-      for (i in (k - ii):n) {
-        yytem2[i, ] = (ii + 1) * ((x - t[i]) * yytem1[i, 
-        ] + (t[i + ii + 1] - x) * yytem1[i + 1, ])/(t[i + 
-                                                        ii + 1] - t[i])/ii
-      }
-      yytem1 = yytem2
-    }
-    index = rep(0, length(x))
-    for (i in 1:length(x)) {
-      index[i] = sum(t <= x[i])
-    }
-    yy = array(rep(0, (n - 1) * length(x)), dim = c(n - 1, 
-                                                    length(x)))
-    if (order == 1) {
-      for (i in 2:n) {
-        yy[i - 1, ] = (i < index - order + 1) + (i == 
-                                                   index) * (t[i + order + 1] - t[i]) * yytem2[i, 
-                                                   ]/(order + 1)
-      }
-    }
-    else {
-      for (j in 1:length(x)) {
-        for (i in 2:n) {
-          if (i < (index[j] - order + 1)) {
-            yy[i - 1, j] = 1
-          }
-          else if ((i <= index[j]) && (i >= (index[j] - 
-                                             order + 1))) {
-            yy[i - 1, j] = (t[(i + order + 1):(index[j] + 
-                                                 order + 1)] - t[i:index[j]]) %*% yytem2[i:index[j], 
-                                                                                         j]/(order + 1)
-          }
-          else {
-            yy[i - 1, j] = 0
-          }
-        }
-      }
-    }
-    return(yy)
-  }
-  Mspline <- function(x, order, knots) {
-    k1 = order
-    m = length(knots)
-    n1 = m - 2 + k1
-    t1 = c(rep(1, k1) * knots[1], knots[2:(m - 1)], rep(1, 
-                                                        k1) * knots[m])
-    tem1 = array(rep(0, (n1 + k1 - 1) * length(x)), dim = c(n1 + 
-                                                              k1 - 1, length(x)))
-    for (l in k1:n1) {
-      tem1[l, ] = (x >= t1[l] & x < t1[l + 1])/(t1[l + 
-                                                     1] - t1[l])
-    }
-    if (order == 1) {
-      mbases = tem1
-    }
-    else {
-      mbases = tem1
-      for (ii in 1:(order - 1)) {
-        tem = array(rep(0, (n1 + k1 - 1 - ii) * length(x)), 
-                    dim = c(n1 + k1 - 1 - ii, length(x)))
-        for (i in (k1 - ii):n1) {
-          tem[i, ] = (ii + 1) * ((x - t1[i]) * mbases[i, 
-          ] + (t1[i + ii + 1] - x) * mbases[i + 1, 
-          ])/(t1[i + ii + 1] - t1[i])/ii
-        }
-        mbases = tem
-      }
-    }
-    return(mbases)
-  }
-  poissrndpositive <- function(lambda) {
-    q = 200
-    t = seq(0, q, 1)
-    p = dpois(t, lambda)
-    pp = cumsum(p[2:(q + 1)])/(1 - p[1])
-    u = runif(1)
-    while (u > pp[q]) {
-      q = q + 1
-      pp[q] = pp[q - 1] + dpois(q, lambda)/(1 - p[1])
-    }
-    ll = sum(u > pp) + 1
-  }
-  positivepoissonrnd<-function(lambda){ 
-    samp = rpois(1, lambda)
-    while (samp==0) {
-      samp = rpois(1, lambda)
-    }
-    return(samp)
-  }
-  theta_fun <- function(x, i, theta, U, zz,mu1,sig_theta, coef_range_theta){
-    theta[i] <- x
-    mu = mu1[i]
-    tt<- sum(zz%*%theta*U -log(1+exp(zz%*%theta)))-(x-mu)^2/sig_theta^2/2
-    return(tt)
-  }
-  ind_fun_theta<- function(x, i, theta, U, zz,mu1,sig_theta, coef_range_theta){(x>-coef_range_theta)*(x<coef_range_theta)}
-  rho_fun <- function(x,r,rho,n1,N,xx,mu,te1,te2,te3,sig_rho,coef_range_rho) 
-  {
-    rho[r]<-x
-    mub = mu[r]
-    tt<-sum(x*xx[1:n1, r] - te3 * exp(xx[1:n1,] %*% rho)) + sum(xx[(n1+1):N,r]*x*te1)-sum(exp(xx[(n1 + 1):N, ]%*%rho)*te2)-(x-mub)^2/sig_rho^2/2 # prior(beta)=N(0,sig0^2) 
-    return(tt)     
-  }
-  ind_fun_rho <- function(x,r,rho,n1,N,xx,mu,te1,te2,te3,sig_rho,coef_range_rho)
-  {(x>-coef_range_rho)*(x<coef_range_rho)}
-  
   Z = cbind(data$Z.1,data$Z.2) 
   W = data$W 
   X = cbind(data$X.1,data$X.2) 
@@ -353,137 +247,14 @@ SMC <- function (data,order, knots, df,grids,
   egcoef = apply(wgcoef,2,mean)
   eg = apply(wg,2,mean)
   S0_m <- apply(wparsurv0, 2, mean)
-  
+  ##save estimates
   est <- list(N = nrow(xcov), parbeta=parbeta,wbeta = wbeta, beta = ebeta, 
               paralpha=paralpha,walpha=walpha,alpha = ealpha,wparsurv0 = wparsurv0,
               S0_m = S0_m, grids = grids,pargam=pargam,fcoef=efcoef,
               gcoef=egcoef,wf=wf,ef=ef,wg=wg,eg=eg,Vgrid = Vgrid,Wgrid=Wgrid,U=U,bisg=bisg)
   est
 }
-CPIC.simu<- function(n,alpha, beta,n1)
-{
-  #data generation
-  library(dplyr)
-  index <- 1:n 
-  # Z = cbind(rbinom(n,1, 0.5),ifelse(index%%2==0,1,0))
-  Z = cbind(rnorm(n,3,1),rbinom(n,1, 0.5))
-  # Z = cbind(1,rbinom(n,1, 0.5),rbinom(n,1, 0.5),rbinom(n,1, 0.5),rbinom(n,1, 0.5))
-  W <- runif(n,0,1)
-  # W <- rnorm(n,0,1) 
-  g <- sin(W*pi)
-  # g <- W
-  # g <- 1/(1+exp(-(W-0.5)*4))
-  # g <- pnorm(W*2-3)/2+pnorm(W*2+3)/2
-  # g <- pnorm(W*2-1)*0.6
-  # g <- W
-  # g <- 0
-  cuindi<-function(alpha, g, n)
-  {
-    eta <- Z%*%alpha+g # uncured probability
-    prob<-exp(eta)/(1+exp(eta));
-    U <- rbinom(n, 1, prob) 
-    re= list(U= U, eta =eta)
-    return(re)
-  }
-  U1 <- cuindi(alpha[1,], g,n)$U; eta1 = cuindi(alpha[1,], g,n)$eta
-  U2 <- cuindi(alpha[2,], g,n)$U; eta2 = cuindi(alpha[2,], g,n)$eta;
-  mean(U1); mean(U2)
-  
-  # X <- cbind(rbinom(n,1,0.5),ifelse(index%%2==0,1,0))
-  X <- cbind(rnorm(n,0,1),rbinom(n,1,0.5))
-  # X <- cbind(rbinom(n,1, 0.5),rbinom(n,1, 0.5),rbinom(n,1, 0.5),rbinom(n,1, 0.5))
-  V <- runif(n ,0, 1)
-  # V <- rnorm(n ,0, 1)
-  # V <- rtruncnorm(n, a=-2, b=2, mean = 0, sd = 1);
-  f<- V^2
-  # f <- sin(V*pi)
-  # f <- log(V^V+0.5)-0.4
-  # f <- V
-  # f <- pnorm(V*2-3)/2+pnorm(V*2+3)/2
-  # f <- 0
-  
-  
-  y <- matrix(rep(0,n), nrow=n, ncol=1)
-  L <- matrix(rep(0,n), nrow=n, ncol=1)
-  R <- matrix(rep(0,n), nrow=n, ncol=1)
-  C <-matrix(1.2, nrow = n, ncol = 1)     # length of study
-  u <- runif(n, 0, 1)
-  # True<- sqrt(-log(1-u)*exp(-X%*%beta-f))
-  True<- sqrt(-0.5*log(1-u)*exp(-X%*%beta-f))
-  # True<- exp(-log(1-u)*exp(-X%*%beta-f))-1
-  # True<- sqrt(exp(-log(1-u)*exp(-X%*%beta-f))-1)
-  # True<- -log(1-u)*exp(-X%*%beta-f)*0.5
-  icProc<- function(True, C, U)
-  {
-    lp <-0 ; rp <-rexp(1,5)
-    if (U==0) return(c(C, Inf))
-    if (U==1)
-    {
-      if (True >= C)  return(c(C, Inf)) 
-      if (True < C & True < rp) return(c(lp,rp))
-      if (True < C & True > rp) 
-      {
-        repeat{ 
-          lp <- rp ; rp <- rp+ runif(1,0,0.2)
-          if(True>lp & True< rp ) {break}
-        }
-        return(c(lp, rp))
-      }
-    }
-  }
-  intends <-mapply(icProc, True = True, C=C, U=U1)
-  y <- ifelse(intends[1,]==0,0,1) ;y <- ifelse(intends[2,]==Inf, 2, y)
-  X1 <- data.frame(L = intends[1,], R = intends[2,],T=True,y = y,U=U1,X = X,V = V, Z = Z, W = W,eta=eta1)
-  if(n1>0){
-    IC=rep(1,n);X1=cbind(X1,IC)
-    ind=sample(which(X1$U==1&X1$y==1),min(n1,sum(X1$U==1&X1$y==1)))
-    X1$L[ind]=X1$T[ind];X1$R[ind]=X1$T[ind];
-    X1$y[ind]=3;X1$IC[ind]=0}
-  X1 <- X1 %>% arrange(IC)
-  if(n1==0){
-    X1 = X1
-  }
-  X1 = cbind(X1,IC)
-  
-  intends <-mapply(icProc, True = True, C=C, U=U2)
-  y <- ifelse(intends[1,]==0,0,1) ;y <- ifelse(intends[2,]==Inf, 2, y)
-  X2 <- data.frame(L = intends[1,], R = intends[2,],T=True,y = y,U=U2,X = X,V = V, Z = Z, W = W,eta=eta2)
-  if(n1>0){
-    IC=rep(1,n);X2=cbind(X2,IC)
-    ind=sample(which(X2$U==1&X2$y==1),min(n1,sum(X2$U==1&X2$y==1)))
-    X2$L[ind]=X2$T[ind];X2$R[ind]=X2$T[ind];
-    X2$y[ind]=3;X2$IC[ind]=0}
-  X2 <- X2 %>% arrange(IC)
-  if(n1==0){
-    X2 = X2
-  }
-  X2 = cbind(X2,IC)
-  
-  cr.t <- c(sum(X1$R==Inf)/n,sum(X2$R==Inf)/n)
-  cr.cure<- c(sum(X1$U==0)/n,sum(X2$U==0)/n)
-  
-  return(list(X1 = X1, X2 = X2, cr.t = cr.t, cr.cure = cr.cure))
-}
-
-
-### Data generation
-n <- 500 #sample size
-n1 <- 0.1*n #exact number
-alpha <- matrix(c(0.5,0.5,-0.5, -0.5), nrow = 2, byrow = TRUE) 
-beta <- c(0.5,-0.5)
-data1=CPIC.simu(n,alpha, beta,n1)
-
-X1 <- data1$X1
-
-
-fit <- SMC(X1,order = 2,knots = NULL, df=5,grids = seq(0, 3, length.out = 100),
-              V.order=2,Vknots=NULL,V.df=5,Vgrid=seq(0,1,length.out = 50),
-              W.order=2,Wknots=NULL,W.df=5,Wgrid=seq(0,1,length.out = 50),
-              a_eta = 1, b_eta = 1, 
-              coef_range_beta = 5,sig_beta = 5,coef_range_alpha = 5,sig_alpha = 5,
-              coef_range_rho = 10,sig_rho = 5,coef_range_theta = 10,sig_theta =5,
-              total = 10000, burnin = 5000, thin = 10)
-  
+ 
   
   
   
